@@ -1,0 +1,251 @@
+var esri_lulc2020 = ee.ImageCollection("projects/sat-io/open-datasets/landcover/ESRI_Global-LULC_10m"),
+    sampling_point = ee.FeatureCollection("projects/ee-xianguihuang3/assets/Sampling_Point"),
+    esri_lulc_ts = ee.ImageCollection("projects/sat-io/open-datasets/landcover/ESRI_Global-LULC_10m_TS");
+
+
+
+//Step 1 import the LCLU map.
+// Define a dictionary which will be used to make legend and visualize image on map.
+var dict = {
+  "names": [
+    "Water",
+    "Trees",
+    "Grass",
+    "Flooded Vegetation",
+    "Crops",
+    "Scrub/Shrub",
+    "Built Area",
+    "Bare Ground",
+    "Snow/Ice",
+    "Clouds"
+  ],
+  "colors": [
+    "#1A5BAB",
+    "#358221",
+    "#A7D282",
+    "#87D19E",
+    "#FFDB5C",
+    "#EECFA8",
+    "#ED022A",
+    "#EDE9E4",
+    "#F2FAFF",
+    "#C8C8C8"
+  ]};
+  
+//display the LULC of each year as seperate layers.
+var years = [2023]; //The esri_lulc_ts collection contain data from 2017 - 2023, select one as required.
+// Loop over each year
+years.forEach(function(year) {
+  var filtered = esri_lulc_ts.filter(ee.Filter.calendarRange(year, year, 'year'))
+                           .mean(); // Or .mosaic(), .first(), etc., depending on your data
+
+  // Add to map with a label
+  Map.addLayer(filtered, {min: 0, max: 10, palette:dict['colors']}, 'LULC' + year);
+});
+
+//Map.addLayer(esri_lulc2020.mosaic(), {min:1, max:10, palette:dict['colors']}, 'esri_lulc2020');
+
+
+//Check the crs of the LCLU map.
+var image_first=esri_lulc_ts.first();
+print("The crs of LCLU map is ", image_first.projection().crs());
+print("The basic infor of each image ", image_first);
+
+
+//Add legend at top-left.
+var legend = ui.Panel({
+style:{
+position: 'top-left',
+padding: '8px 20px'
+}
+});
+
+var legendTitle = ui.Label({
+  value: 'ESRI LCLU 10m',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '12px',
+    margin: '0 0 4px 0',
+    padding: '5px'
+    }
+});
+
+legend.add(legendTitle);
+
+var makeRow = function(color, name) {
+      var colorBox = ui.Label({
+        style: {
+          backgroundColor:color,
+          // Use padding to give the box height and width.
+          padding: '8px',
+          margin: '0 0 4px 0'
+        }
+      });
+      
+      //Create the description text for the colored box.
+      var description = ui.Label({
+        value: name,
+        style: {
+          fontSize: "10px",
+          margin: '0 0 4px 6px'
+        }
+      });
+      
+      // return the panel
+      return ui.Panel({
+        widgets: [colorBox, description],
+        layout: ui.Panel.Layout.Flow('horizontal')
+      });
+};
+
+//creat the value for color and name list.
+var colors_array=dict['colors'];
+var name_array=dict['names'];
+var array_length=colors_array.length;
+
+//Add the color palette and names to the legend.
+for (var i = 0; i < array_length; i++) {
+  legend.add(makeRow(colors_array[i], name_array[i]));
+  }
+  
+//Add legend to the map.
+Map.add(legend);
+
+
+
+
+//Step 2 import the sampling point from csv file onto the loaded LCLU map.
+//Load the CSV file as a FeatureCollection in the import top box.
+//print('Point data:', sampling_point);
+//Display the points on the map
+Map.addLayer(sampling_point, {color: '000000', size: 40}, 'Point Data');
+
+var pts_collection = ee.FeatureCollection(sampling_point);//server-side table.
+//print(pts_collection);
+
+
+
+
+//Step 3 read LULC data for each sampling point with a rectangle region of 5*5 km.
+
+// Evaluate the FeatureCollection, read the LCLU for each point feature in 'for' loop.
+pts_collection.evaluate(function(clientSidePoints) {
+  // Access the features array on the client side
+  var features = clientSidePoints.features;
+
+  // Use a for-loop to iterate through each point
+  for (var i = 0; i < features.length; i++) {
+    var point_feature = features[i];
+    var properties = point_feature.properties;
+    var geometry = point_feature.geometry;
+
+    // Extract sample id and coordinates
+    var point_id = properties.id;//point id.
+    var point_coords = geometry.coordinates; //point coordinate (x, y).
+    var point_obj = ee.Geometry.Point(point_coords);
+    
+    //space extension of 2.5 km for each point.
+    var pts_region = point_obj.buffer(2500).bounds();
+    //find which image the point belongs to and return the image object.
+    var image_1 = esri_lulc2020.filterBounds(point_obj);
+    var image_2 =image_1.first();
+    var image_obj=ee.Image(image_2);
+    // Compute the frequency histogram of band values in the region containing the point.
+    var histogram = image_obj.reduceRegion({
+       reducer: ee.Reducer.frequencyHistogram(),
+       geometry: pts_region,
+       scale: 10, // Specify the resolution (in meters)
+       maxPixels: 1e9
+    });
+    
+    //extract the lclu data from the return the histogram object.
+    var lclu_data = histogram.get('b1');
+    //print('lclu data :', lclu_data);
+    var lclu_dir = ee.Dictionary(lclu_data);
+    var keys = lclu_dir.keys();
+    
+    var rows = keys.map(function(key) {
+      // Extract the value for each key
+      var value = lclu_dir.get(key);
+      // Create a feature with 'key' and 'value' as properties
+      return ee.Feature(null, {ID:point_id, lclu: key, value: value});
+    });
+
+  // Convert the rows into a FeatureCollection
+  var lclu_table = ee.FeatureCollection(rows);
+  //export to CSV.
+   Export.table.toDrive({
+   collection:lclu_table,
+   description: point_id,
+   folder:'GEE_LCLU_2023', //Notices: make sure the folder name ended with the year of employed LULC.
+   fileFormat: 'CSV'
+   });
+    
+  }
+
+    
+});
+
+
+
+/**
+
+//Extract the lclu for a point.
+
+//define the sample area is rectangle of 5 *5 km.
+var point = ee.Geometry.Point([-76.79443, 39.26905]);
+Map.addLayer(point, {color: '000000', size: 40}, 'Point');
+
+var pts_region = point.buffer(2500).bounds();//space extension of 2.5 km.
+
+//find which image the point belongs to.
+var image_1 = esri_lulc2020.filterBounds(point);
+var image_2 =image_1.first();
+print('The filtred image is', image_2);
+var image_obj=ee.Image(image_2);
+// Compute the frequency histogram of band values in the region
+var histogram = image_obj.reduceRegion({
+  reducer: ee.Reducer.frequencyHistogram(),
+  geometry: pts_region,
+  scale: 10, // Specify the resolution (in meters)
+  maxPixels: 1e9
+});
+
+
+var lclu_data = histogram.get('b1');
+print('lclu data of a point:', lclu_data);
+var lclu_dir_1 = ee.Dictionary(lclu_data);
+
+//Get the keys and values from the dictionary
+var keys = lclu_dir_1.keys();
+
+
+// Map over the keys to create individual rows
+var rows = keys.map(function(key) {
+  // Extract the value for each key
+  var value = lclu_dir_1.get(key);
+  // Create a feature with 'key' and 'value' as properties
+  return ee.Feature(null, {ID:'10A', lclu: key, value: value});
+});
+
+// Convert the rows into a FeatureCollection
+var lclu_table = ee.FeatureCollection(rows);
+
+
+//Export the FeatureCollection to a CSV file.
+Export.table.toDrive({
+  collection:lclu_table,
+  description:'10A',
+  folder:'GEE_LCLU_2023',
+  fileFormat: 'CSV'
+});
+  
+**/ 
+
+
+
+
+
+print("The end of this program.");
+
+
