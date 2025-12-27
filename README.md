@@ -17,8 +17,10 @@ Usage and Citation
 Although the code in this repository is publicly accessible, all intellectual rights remain with the authors of the study.
 If you use or adapt any part of this code in your own research or projects, proper citation of the original study is required.
 
+
 Authors:
 Xiangui Huang a, Zhang Cheng b, Avner Ronen a
+
 a Zuckerberg Institute for Water Research, Ben-Gurion University of the Negev
 b Department of Civil & Environmental Engineering, Temple University
 
