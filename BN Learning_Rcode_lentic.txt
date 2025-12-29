@@ -1,0 +1,324 @@
+#--------------------------------
+#BN learning for lentic system.
+#-------------------------------
+
+install.packages("VIM")
+install.packages("splitstackshape")
+
+{
+  library(cluster)
+  library(stats)
+  library(vegan)
+  library(fossil)
+  library(ape)
+  library(GUniFrac)
+  library(data.table)
+  library(bnlearn)
+  library(Rgraphviz)
+  library(hydroGOF)
+  library(Metrics)
+  library(tidyverse)
+  library(ggplot2)
+  library(scales)
+  library(parallel)
+  library(stringr)
+  library(VIM)
+  library(dplyr)
+  library(xgboost)
+}
+#---------------------
+
+## Initial Constant setting
+{
+  #nofsp<-202 #The number of samples
+  noffea<-17 #The number of features
+  {
+    # Warning: Before processing, please arrange features in the following order
+    hum_ac<-5 # 1. human activity related
+    wat_qua<-10 # 2. water quality related
+    env_fa<-2 # 3. environmental factors
+    loc_str<-c(1,6,16,18)
+  }
+  nofpf<-3 #The number of PFAS
+  nofgeo<-7 #The number of Geo-meta
+  noffold<-5 #The number of folds
+  ttratio<-0.2 #The ratio of training to testing
+  spr_limit<-0.3 #The sparsity limit
+  nr_limit<-50000 #The limit of nround
+  #sp_del<-c(76,77,78,116,119) #Delete the bad samples
+  #nofsp<-nofsp-length(sp_del)
+}
+
+{
+  ## Data pre-processing
+  {
+    #Warning: Before processing data, please add columns of ID_COPY and DATE right after the read Table
+    setwd("C:/Users/CZ100/Desktop/Project_Global_PFAS/") #Set the environmental file
+    feature<-read.csv("New_feature.csv",header=T,row.names=1,check.names=F) # read the feature table
+    gdp<-read.csv("GDP.csv",header=T,row.names=1,check.names=F) # read the GDP
+    
+    #Splitting the features, labels, and metadata
+    geoinfo<-feature[,1:nofgeo];
+    feature<-feature[,-(1:nofgeo)];
+    feature_table<-feature[,1:(noffea)];
+    feature<-feature[,-(1:(noffea))];
+    pfas<-feature[,1:nofpf];
+    feature<-feature[,-(1:nofpf)];
+    
+    #Putting GDP into features
+    #feature_table$GDP<-gdp[match(geoinfo$Country,gdp[,1]),13]
+    
+    #KNN interpolation
+    set.seed(716)
+    feature_table<-kNN(feature_table, k = 5, imp_var = FALSE, numFun = "mean")
+    feature_table[feature_table<0]<-0
+    
+    #Output interpolated feature_table
+    #write.csv(feature_table,"New_feature_interpolated.csv")
+    
+    pfas[is.na(pfas)]<-0
+    
+    # delete the outliers
+    feature_table<-feature_table[-sp_del,]
+    pfas<-pfas[-sp_del,]
+    geoinfo<-geoinfo[-sp_del,]
+    feature<-feature[-sp_del,]
+    
+    pfas_class<-pfas
+    pfas_class[pfas_class>0]=1 #Generating labels for checking the apperance of pfas
+    
+    feature_label<-cbind(feature_table,pfas, feature[,1,drop=F],geoinfo) #Combining featuresand labels
+    feature_label_class<-cbind(feature_table,pfas_class, feature[,1,drop=F],geoinfo) #Combining featuresand labels
+    # feature_lable_georank<-feature_label[order(feature_label$Continent),]
+    # write.csv(feature_label,"feature_table_imputated.csv")
+    
+    feature_label<-feature_label[feature_label$Water_type=="Lentic",]
+    feature_label_class<-feature_label_class[feature_label_class$Water_type=="Lentic",]
+    
+    set.seed(716)
+    #Generating testing and training sets
+    testset <- feature_label %>%
+      group_by(Continent) %>%
+      slice_sample(prop = ttratio) %>%
+      ungroup()
+    testset<-data.frame(testset)
+    trainset <- feature_label[-(match(testset$ID_COPY,feature_label$ID_COPY)),]
+    rownames(testset)<-testset$ID_COPY
+    rownames(trainset)<-trainset$ID_COPY
+    write.csv(testset,"testset_lentic.csv")
+    write.csv(trainset,"trainset_lentic.csv")
+    
+    testset_class<-feature_label_class[match(testset$ID_COPY,feature_label$ID_COPY),]
+    trainset_class<-feature_label_class[match(trainset$ID_COPY,feature_label$ID_COPY),]
+    
+    #Deleting meta
+    testset<-testset[,1:(noffea+nofpf)]
+    trainset<-trainset[,1:(noffea+nofpf)]
+    testset_class<-testset_class[,1:(noffea+nofpf)]
+    trainset_class<-trainset_class[,1:(noffea+nofpf)]
+  }
+  
+  ## Structure Learning
+  {
+    setwd("C:/Users/CZ100/Desktop/Project_Global_PFAS/") #Set the environmental file
+    #trainset<-read.csv("train_dataset_Lentic.csv",header=T,row.names=1,check.names=F) # read the feature table
+    trainset<-rbind(trainset,testset)
+    
+    #Setting the random seed
+    set.seed(617)
+    
+    #Learning structure of averaged BN
+    var_names<-colnames(trainset)
+    fea_names<-var_names[1:noffea]
+    lab_names<-var_names[-(1:noffea)]
+    
+    bl<-read.csv("Blacklist.csv",header=T,row.names=1,check.names=F) # read the blacklist frame
+    wl<-read.csv("Whitelist.csv",header=T,row.names=1,check.names=F) # read the whitelist frame
+    js<-0
+    for (i in 1:noffea)
+      for (j in 1:nofpf)
+      {
+        js=js+1
+        bl[js,1]<-lab_names[j]
+        bl[js,2]<-fea_names[i]
+      }
+    
+    # obtaining stratified feature names
+    fea2_names<-fea_names[loc_str[1]:(loc_str[2]-1)]
+    fea1_names<-fea_names[loc_str[2]:(loc_str[3]-1)]
+    fea3_names<-fea_names[loc_str[3]:(loc_str[4]-1)]
+    
+    fea2_3_names<-c(fea2_names,fea3_names)
+    for (i in 1:(hum_ac+env_fa))
+      for (j in 1:(wat_qua))
+      {
+          js=js+1
+          bl[js,1]<-fea1_names[j]
+          bl[js,2]<-fea2_3_names[i]
+      }
+    
+    for (i in 1:(hum_ac))
+      for (j in 1:(env_fa))
+      {
+        js=js+1
+        bl[js,1]<-fea2_names[i]
+        bl[js,2]<-fea3_names[j]
+        js=js+1
+        bl[js,1]<-fea3_names[j]
+        bl[js,2]<-fea2_names[i]
+      }
+    {
+      js=1
+      wl[js,1]<-"Atemp"
+      wl[js,2]<-"Wtemp"
+    }
+    
+    write.csv(bl,"blacklist_complete.csv")
+    
+   
+    trainset<-as.data.frame(lapply(trainset,as.numeric))
+    
+    boot_result <- boot.strength(
+      data = trainset,
+      R = 500,  #replicates
+      algorithm = "hc",  #hill-climbing
+      algorithm.args = list(blacklist = bl,whitelist = wl)
+    )
+    
+    avg_bn <- averaged.network(boot_result, threshold = 0.2) #here we set up the threshold as 0.2.
+    shown_arcs<-data.frame(avg_bn[["arcs"]])
+    boot_result$arcs<-paste(boot_result$from,"~",boot_result$to,sep="")
+    shown_arcs$arcs<-paste(shown_arcs$from,"~",shown_arcs$to,sep="")
+    shown_arcs$strength<-boot_result[match(shown_arcs$arcs,boot_result$arcs),"strength"]
+    
+    setwd("C:/Users/CZ100/Desktop/Project_Global_PFAS/Rooteq_now/") #Set the output dir
+    write.csv(boot_result,"all_arcs_lentic_v3.csv")
+    write.csv(shown_arcs,"shown_arcs_lentic_v3.csv")
+  }
+  
+  
+  
+  
+  
+  
+  
+  ## Bayesian network plotting (optional)
+  {
+    #Generalizing the data
+    {
+      #trainset_class_sc<-trainset_class
+      trainset_sc<-trainset
+      #testset_sc<-testset
+      maxs <- apply(trainset[,1:noffea], 2, max)
+      mins <- apply(trainset[,1:noffea], 2, min)
+      #trainset_class_sc[,1:noffea] <- as.data.frame(scale(trainset[,1:noffea], center = mins, scale = maxs - mins)) # scaling to 0 - 1
+      trainset_sc[,1:noffea] <- as.data.frame(scale(trainset[,1:noffea], center = mins, scale = maxs - mins)) # scaling to 0 - 1
+      #testset_sc[,1:noffea]<- as.data.frame(scale(testset[,1:noffea], center = mins, scale = maxs - mins)) # scaling to 0 - 1
+    }
+    
+    
+    bn_all_1<-avg_bn
+    bin_plot=graphviz.plot(bn_all_1, layout = "fdp", shape ="rectangle",main = NULL, sub = NULL)
+    
+    attrs=list()
+    # attrs$node$shape="ellipse"
+    # attrs$fontsize=rep(100,4) # for resolution 1600x1200
+    # attrs$node$height="1"
+    # attrs$node$width="4"
+    attrs$edge$color="grey"
+    attrs$edge$arrowsize=1.2
+    attrs$edge$lwd=1.8
+    #attrs$graph$overlap="FALSE"
+    
+    
+    nAttrs=list()
+    nod_sha=c(rep("box",noffea),rep("circle",nofpf)) 
+    names(nod_sha)=var_names #Var_names is retrieved from Structure learning Section.
+    nAttrs$shape <- nod_sha
+    
+    nod_lab<-var_names
+    #nod_lab[23:37]=nodes_tot
+    names(nod_lab)=var_names
+    nAttrs$label=nod_lab
+    # lab<-rbind(lab,colnames(taxa_env_sc[,1:38]))
+    # lab<-lab[-1,]
+    # nodes_core_cur,nodes_knt,nodes_env,nodes_envd,nodes_core_his
+    
+    nod_col=c(rep("#DEDDD8",hum_ac),rep("#E2F3FA",wat_qua),rep("white",env_fa),rep("#FFE5E5",nofpf))
+    #loc_highlight<-match(node_detect1,nodes_tot) #Activate this if need highlighting
+    #nod_col[loc_highlight]="red" #Activate this if need highlighting
+    names(nod_col)=var_names
+    nAttrs$fillcolor=nod_col
+    
+    #FX=c(rep(FALSE,nrow(taxa)), rep(TRUE,19)) # fixedsize
+    #FX=c(rep(TRUE,5),rep(FALSE,22),rep(TRUE,5),rep(FALSE,22))
+    FX=rep(FALSE,noffea+nofpf)
+    names(FX)=var_names
+    nAttrs$fixedsize=FX
+    
+    nodewide<-c(rep(7,noffea),10,rep(0.2,nofpf-1))
+    names(nodewide)=var_names
+    nAttrs$width=nodewide
+    
+    nodeheight<-c(rep(2.5,noffea),10,rep(0.2,nofpf-1))
+    names(nodeheight)=var_names
+    nAttrs$height=nodeheight
+    
+    label_val<-as.matrix(trainset_sc[,-(1:noffea)])
+    nod_size=c(rep(60,noffea), (apply(label_val,2,mean))+30)
+    #nod_size=c(rep(10,38),rep(24,12))
+    names(nod_size)=var_names
+    nAttrs$fontsize=nod_size
+    
+    eAttrs=list()
+    #edge_size=c(rep(1.8,74),rep(10,20))
+    #names(edge_size)=nodes_tot
+    #eAttrs$lwd=edge_size
+    #bnpl=
+    #custom.strength(bn_all, nodes, weights = NULL, cpdag = TRUE, debug = FALSE)
+    shown_arcs_list<-setNames(shown_arcs$strength*3+1,shown_arcs$arcs)
+    plot_arcs<-edgeNames(bin_plot)
+    shown_arcs_list<-shown_arcs_list[names(shown_arcs_list) %in% plot_arcs]
+    
+    eAttrs <- list(
+      lwd = shown_arcs_list
+    )
+    
+    
+    bin_RG<-Rgraphviz::plot( bin_plot,attrs=attrs, nodeAttrs=nAttrs,edgeAttrs=eAttrs,main=NULL, sub=NULL, cex=10, "fdp") 
+    #bin_RG@AgEdge[[1]]@lwd<-10
+    #plot(bin_RG)
+    
+  }
+
+#outputting the dependencies
+    {
+      ccp<-matrix(nrow = nofpf+noffea,ncol=251) #Parents to all nodes
+      ccp[is.na(ccp)]<-0
+      ccp_c<-matrix(nrow = noffea,ncol=251) #Children of root nodes
+      ccp_c[is.na(ccp_c)]<-0
+      for (i in 1:(nofpf+noffea))
+      {
+        num<-length(avg_bn[["nodes"]][[var_names[noffea+i]]][["parents"]])
+        ccp[i,1]=num
+        if (num>0)
+          for (a in 1:num) ccp[i,1+a]<-avg_bn[["nodes"]][[var_names[noffea+i]]][["parents"]][a]
+      }
+      for (j in 1:noffea)
+      {
+        num<-length(avg_bn[["nodes"]][[var_names[j]]][["children"]])
+        ccp_c[j,1]=num
+        if (num>0)
+          for (a in 1:num) ccp_c[j,1+a]<-avg_bn[["nodes"]][[var_names[j]]][["children"]][a]
+      }
+      row.names(ccp)<-c(var_names[-(1:noffea)],var_names[1:noffea])
+      row.names(ccp_c)<-var_names[1:noffea]
+      
+      setwd("C:/Users/CZ100/Desktop/Project_Global_PFAS/BN_Equations_now/") #Set the output dir
+      write.csv(ccp,"CCP_Output_Lentic_v3.csv")
+      write.csv(ccp_c,"Pare_Child_Lentic_v3.csv")
+    }
+
+
+
+
