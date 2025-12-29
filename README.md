@@ -19,9 +19,11 @@ If you use or adapt any part of this code in your own research or projects, prop
 
 
 Authors:
-Xiangui Huang a, Zhang Cheng b, Avner Ronen a
+
+Xiangui Huanga, Zhang Chengb, Avner Ronena
 
 a Zuckerberg Institute for Water Research, Ben-Gurion University of the Negev
+
 b Department of Civil & Environmental Engineering, Temple University
 
 Date: December 27, 2025
