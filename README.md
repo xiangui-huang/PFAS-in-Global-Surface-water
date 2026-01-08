@@ -1,4 +1,4 @@
-This repository contains the source code developed for the study “Global Divergence of Per- and Polyfluoroalkyl Substances in Lotic and Lentic Surface Waters.”
+This repository contains the source code developed for the study “A tale of two water bodies: How per and polyfluoroalkyl substances pollute lentic vs lotic surface waters”
 
 Contents
 
@@ -22,8 +22,8 @@ Authors:
 
 Xiangui Huanga, Zhang Chengb, Avner Ronena
 
-a Zuckerberg Institute for Water Research, Ben-Gurion University of the Negev
+a Zuckerberg Institute for Water Research, Ben-Gurion University of the Negev, Israel
 
-b Department of Civil & Environmental Engineering, Temple University
+b Department of Civil & Environmental Engineering, Temple University, the United States
 
 Date: December 27, 2025
