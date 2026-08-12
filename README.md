@@ -1,4 +1,4 @@
-This repository contains the source code developed for the study “A tale of two water bodies: How per and polyfluoroalkyl substances pollute lentic vs lotic surface waters”
+This repository contains the source code developed for the study “Global pollution by per- and polyfluoroalkyl substances in lotic and lentic water”
 
 Contents
 
@@ -18,12 +18,12 @@ Although the code in this repository is publicly accessible, all intellectual ri
 If you use or adapt any part of this code in your own research or projects, proper citation of the original study is required.
 
 
-Authors:
 
-Xiangui Huanga, Zhang Chengb, Avner Ronena
+
+Xiangui Huang^a, Zhang Cheng^b, Avner Ronen^a
 
 a Zuckerberg Institute for Water Research, Ben-Gurion University of the Negev, Israel
 
 b Department of Civil & Environmental Engineering, Temple University, the United States
 
-Date: December 27, 2025
+August 12, 2026
